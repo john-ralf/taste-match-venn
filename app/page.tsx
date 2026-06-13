@@ -855,8 +855,10 @@ function buildRecommendations(listeners: ListenerProfile[]): Recommendation[] {
 }
 
 function getCircleLayout(count: number, score: number) {
+  const closeness = score / 100;
+
   if (count <= 2) {
-    const separation = 54 - score * 0.22;
+    const separation = 84 - closeness * 56;
     return [
       { cx: 110 - separation / 2, cy: 88, r: 56, labelX: 72, labelY: 154 },
       { cx: 110 + separation / 2, cy: 88, r: 56, labelX: 148, labelY: 154 },
@@ -864,18 +866,20 @@ function getCircleLayout(count: number, score: number) {
   }
 
   if (count === 3) {
+    const spread = 40 - closeness * 22;
     return [
-      { cx: 82, cy: 76, r: 51, labelX: 54, labelY: 154 },
-      { cx: 138, cy: 76, r: 51, labelX: 166, labelY: 154 },
-      { cx: 110, cy: 116, r: 51, labelX: 110, labelY: 168 },
+      { cx: 110 - spread, cy: 78, r: 51, labelX: 54, labelY: 154 },
+      { cx: 110 + spread, cy: 78, r: 51, labelX: 166, labelY: 154 },
+      { cx: 110, cy: 102 + spread * 0.8, r: 51, labelX: 110, labelY: 168 },
     ];
   }
 
+  const spread = 43 - closeness * 24;
   return [
-    { cx: 78, cy: 72, r: 47, labelX: 43, labelY: 154 },
-    { cx: 142, cy: 72, r: 47, labelX: 177, labelY: 154 },
-    { cx: 82, cy: 118, r: 47, labelX: 68, labelY: 168 },
-    { cx: 138, cy: 118, r: 47, labelX: 152, labelY: 168 },
+    { cx: 110 - spread, cy: 90 - spread * 0.58, r: 47, labelX: 43, labelY: 154 },
+    { cx: 110 + spread, cy: 90 - spread * 0.58, r: 47, labelX: 177, labelY: 154 },
+    { cx: 110 - spread, cy: 90 + spread * 0.58, r: 47, labelX: 68, labelY: 168 },
+    { cx: 110 + spread, cy: 90 + spread * 0.58, r: 47, labelX: 152, labelY: 168 },
   ];
 }
 
