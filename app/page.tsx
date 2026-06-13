@@ -30,6 +30,8 @@ type PairOverlap = {
 
 type MatchStats = {
   score: number;
+  exactScore: number;
+  genreScore: number;
   commonItems: MusicItem[];
   commonGenres: string[];
   unionCount: number;
@@ -41,6 +43,24 @@ type Recommendation = {
   item: MusicItem;
   score: number;
   reasons: string[];
+};
+
+type VennCircleLayout = {
+  cx: number;
+  cy: number;
+  r: number;
+  labelX: number;
+  labelY: number;
+};
+
+type VennMarker = {
+  key: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  color: string;
+  shared: boolean;
 };
 
 type RoomStatus = "idle" | "loading" | "saving" | "saved" | "error";
@@ -319,8 +339,8 @@ export default function Home() {
             <VennDiagram listeners={listeners} stats={stats} />
 
             <div className="stat-row">
-              <Metric label="Exact overlap" value={String(stats.commonItems.length)} />
-              <Metric label="Shared genres" value={String(stats.commonGenres.length)} />
+              <Metric label="Exact score" value={`${stats.exactScore}%`} />
+              <Metric label="Genre score" value={`${stats.genreScore}%`} />
               <Metric label="Compared" value={String(stats.unionCount)} />
             </div>
 
@@ -592,6 +612,7 @@ function SearchPicker({
 
 function VennDiagram({ listeners, stats }: { listeners: ListenerProfile[]; stats: MatchStats }) {
   const layout = getCircleLayout(listeners.length, stats.score);
+  const markers = getVennMarkers(listeners, layout);
 
   return (
     <div className="venn-wrap">
@@ -613,6 +634,33 @@ function VennDiagram({ listeners, stats }: { listeners: ListenerProfile[]; stats
             </text>
           </g>
         ))}
+        <g>
+          {markers.map((marker) => (
+            <g key={marker.key} transform={`translate(${marker.x} ${marker.y})`}>
+              <rect
+                x={-marker.width / 2}
+                y="-7"
+                width={marker.width}
+                height="14"
+                rx="5"
+                fill="rgba(255, 255, 255, 0.9)"
+                stroke={marker.color}
+                strokeWidth="1.2"
+                strokeDasharray={marker.shared ? "0" : "2 2"}
+              />
+              <text
+                fill="#292524"
+                fontSize="5.5"
+                fontWeight="900"
+                letterSpacing="0"
+                textAnchor="middle"
+                dominantBaseline="middle"
+              >
+                {marker.label}
+              </text>
+            </g>
+          ))}
+        </g>
         <g>
           <circle cx="110" cy="90" r="28" fill="#ffffff" stroke="#292524" strokeWidth="1.5" />
           <text x="110" y="84" textAnchor="middle" className="venn-score">
@@ -766,14 +814,14 @@ function computeStats(listeners: ListenerProfile[], mode: Mode): MatchStats {
   );
 
   const genreSets = listeners.map((listener) => new Set(uniqueGenres(getAllItems(listener, mode))));
-  const genreUnion = new Set(genreSets.flatMap((set) => Array.from(set)));
   const commonGenres = genreSets.length
     ? Array.from(genreSets[0]).filter((genre) => genreSets.every((set) => set.has(genre)))
     : [];
 
   const exactRatio = unionKeys.size ? commonItems.length / unionKeys.size : 0;
-  const genreRatio = genreUnion.size ? commonGenres.length / genreUnion.size : 0;
-  const score = Math.round(Math.min(100, exactRatio * 55 + genreRatio * 45));
+  const exactScore = Math.round(exactRatio * 100);
+  const genreScore = Math.round(getPairwiseGenreScore(genreSets));
+  const score = Math.round(Math.min(100, exactScore * 0.35 + genreScore * 0.65));
 
   const pairOverlaps: PairOverlap[] = [];
   for (let a = 0; a < itemSets.length; a += 1) {
@@ -795,12 +843,168 @@ function computeStats(listeners: ListenerProfile[], mode: Mode): MatchStats {
 
   return {
     score,
+    exactScore,
+    genreScore,
     commonItems,
     commonGenres,
     unionCount: unionKeys.size,
     onlyByListener,
     pairOverlaps,
   };
+}
+
+function getPairwiseGenreScore(genreSets: Set<string>[]) {
+  if (genreSets.length < 2) {
+    return 0;
+  }
+
+  const scores: number[] = [];
+  for (let a = 0; a < genreSets.length; a += 1) {
+    for (let b = a + 1; b < genreSets.length; b += 1) {
+      scores.push(jaccard(genreSets[a], genreSets[b]) * 100);
+    }
+  }
+
+  return scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
+}
+
+function getVennMarkers(listeners: ListenerProfile[], layout: VennCircleLayout[]): VennMarker[] {
+  const center = { x: 110, y: 90 };
+  const markerMap = new Map<
+    string,
+    {
+      label: string;
+      ownerIndexes: Set<number>;
+      genres: Set<string>;
+      artistPick: boolean;
+    }
+  >();
+  const listenerGenreSets = listeners.map((listener) => new Set(uniqueGenres([...listener.artists, ...listener.tracks])));
+
+  listeners.forEach((listener, listenerIndex) => {
+    const markerItems = [
+      ...listener.artists.map((item) => ({ label: item.name, item, artistPick: true })),
+      ...listener.tracks.flatMap((item) =>
+        (item.artistNames?.length ? item.artistNames : item.subtitle ? [item.subtitle] : []).map((label) => ({
+          label,
+          item,
+          artistPick: false,
+        }))
+      ),
+    ];
+
+    for (const markerItem of markerItems) {
+      const normalizedLabel = normalizeMusicKey(markerItem.label);
+      if (!normalizedLabel) {
+        continue;
+      }
+
+      const key = `artist-label:${normalizedLabel}`;
+      const marker = markerMap.get(key) ?? {
+        label: markerItem.label,
+        ownerIndexes: new Set<number>(),
+        genres: new Set<string>(),
+        artistPick: false,
+      };
+
+      marker.ownerIndexes.add(listenerIndex);
+      marker.artistPick = marker.artistPick || markerItem.artistPick;
+      for (const genre of markerItem.item.genres.map((genre) => genre.toLowerCase())) {
+        marker.genres.add(genre);
+      }
+      markerMap.set(key, marker);
+    }
+  });
+
+  return Array.from(markerMap.entries())
+    .sort(([, a], [, b]) => {
+      const ownerDelta = b.ownerIndexes.size - a.ownerIndexes.size;
+      if (ownerDelta !== 0) {
+        return ownerDelta;
+      }
+
+      if (a.artistPick !== b.artistPick) {
+        return a.artistPick ? -1 : 1;
+      }
+
+      return b.genres.size - a.genres.size || a.label.localeCompare(b.label);
+    })
+    .slice(0, 14)
+    .map(([key, marker], markerIndex) => {
+      const ownerIndexes = Array.from(marker.ownerIndexes);
+      const markerGenres = marker.genres;
+      const shared = ownerIndexes.length > 1;
+      const label = truncateLabel(marker.label);
+      const width = Math.min(64, Math.max(28, label.length * 4.1 + 11));
+
+      if (shared) {
+        const angle = (markerIndex / Math.max(1, markerMap.size)) * Math.PI * 2 - Math.PI / 2;
+        const distance = 34 + (markerIndex % 3) * 7;
+        return {
+          key,
+          label,
+          x: clamp(center.x + Math.cos(angle) * distance, 34, 186),
+          y: clamp(center.y + Math.sin(angle) * distance, 34, 146),
+          width,
+          color: "#292524",
+          shared,
+        };
+      }
+
+      const ownerIndex = ownerIndexes[0] ?? 0;
+      const ownerCircle = layout[ownerIndex] ?? layout[0];
+      const ownerGenres = listenerGenreSets[ownerIndex] ?? new Set<string>();
+      const otherGenreAffinity = listenerGenreSets
+        .filter((_, index) => index !== ownerIndex)
+        .reduce((best, genreSet) => Math.max(best, jaccard(markerGenres, genreSet)), 0);
+      const selfGenreAffinity = jaccard(markerGenres, ownerGenres);
+      const affinity = Math.max(otherGenreAffinity, selfGenreAffinity * 0.2);
+      const vector = normalizeVector(ownerCircle.cx - center.x, ownerCircle.cy - center.y);
+      const tangent = { x: -vector.y, y: vector.x };
+      const jitter = ((hashString(key) % 100) / 100 - 0.5) * 22;
+      const distance = 18 + (1 - affinity) * 38;
+
+      return {
+        key,
+        label,
+        x: clamp(center.x + vector.x * distance + tangent.x * jitter, 28, 192),
+        y: clamp(center.y + vector.y * distance + tangent.y * jitter, 28, 152),
+        width,
+        color: listeners[ownerIndex]?.color ?? "#292524",
+        shared,
+      };
+    });
+}
+
+function jaccard(a: Set<string>, b: Set<string>) {
+  if (!a.size || !b.size) {
+    return 0;
+  }
+
+  const intersection = Array.from(a).filter((value) => b.has(value)).length;
+  const union = new Set([...a, ...b]).size;
+  return union ? intersection / union : 0;
+}
+
+function normalizeVector(x: number, y: number) {
+  const length = Math.hypot(x, y) || 1;
+  return { x: x / length, y: y / length };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function truncateLabel(value: string) {
+  return value.length > 14 ? `${value.slice(0, 12)}.` : value;
 }
 
 function buildRecommendations(listeners: ListenerProfile[]): Recommendation[] {
