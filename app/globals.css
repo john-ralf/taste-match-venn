@@ -428,19 +428,12 @@ h3 {
   font-size: 0.78rem;
 }
 
-.manual-option {
-  color: var(--teal);
-}
-
-.manual-mark {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border: 1px solid #b9d3ca;
-  border-radius: 8px;
-  background: #edf7f4;
-  font-weight: 900;
+.result-empty {
+  border-top: 1px solid #edf0ea;
+  padding: 11px 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .pill-list {

@@ -1,4 +1,4 @@
-import { filterCatalog, type MusicItem, type MusicKind } from "@/lib/music";
+import type { MusicItem } from "@/lib/music";
 
 type SpotifyImage = {
   url?: string;
@@ -47,13 +47,13 @@ export async function GET(request: Request) {
   const kind = url.searchParams.get("type") === "track" ? "track" : "artist";
 
   if (!query) {
-    return Response.json({ provider: "sample", items: filterCatalog(kind, "") });
+    return spotifyResponse([]);
   }
 
   try {
     const token = await getSpotifyToken();
     if (!token) {
-      return sampleResponse(kind, query);
+      return spotifyResponse([], "Spotify is not configured.", 503);
     }
 
     const searchUrl = new URL("https://api.spotify.com/v1/search");
@@ -69,7 +69,7 @@ export async function GET(request: Request) {
     });
 
     if (!response.ok) {
-      return sampleResponse(kind, query);
+      return spotifyResponse([], "Spotify search failed.", 502);
     }
 
     const payload = (await response.json()) as SpotifySearchResponse;
@@ -78,10 +78,10 @@ export async function GET(request: Request) {
 
     return Response.json({
       provider: "spotify",
-      items: items.length ? items : filterCatalog(kind, query),
+      items,
     });
   } catch {
-    return sampleResponse(kind, query);
+    return spotifyResponse([], "Spotify search failed.", 502);
   }
 }
 
@@ -127,11 +127,12 @@ async function getSpotifyToken() {
   return cachedToken.value;
 }
 
-function sampleResponse(kind: MusicKind, query: string) {
+function spotifyResponse(items: MusicItem[], error?: string, status = 200) {
   return Response.json({
-    provider: "sample",
-    items: filterCatalog(kind, query),
-  });
+    provider: "spotify",
+    items,
+    ...(error ? { error } : {}),
+  }, { status });
 }
 
 function mapArtists(artists: SpotifyArtist[]): MusicItem[] {

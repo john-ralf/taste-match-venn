@@ -1,7 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { filterCatalog, type ListenerProfile, type MusicItem, type MusicKind } from "../lib/music";
+import type { ListenerProfile, MusicItem, MusicKind } from "../lib/music";
 import type { RoomPayload, RoomSaveRequest } from "../lib/rooms";
 
 interface Env {
@@ -109,13 +109,13 @@ async function handleSpotifySearchRequest(request: Request, env: Env) {
   const kind: MusicKind = url.searchParams.get("type") === "track" ? "track" : "artist";
 
   if (!query) {
-    return json({ provider: "sample", items: filterCatalog(kind, "") });
+    return spotifySearchResponse([]);
   }
 
   try {
     const token = await getSpotifyToken(env);
     if (!token) {
-      return sampleSpotifyResponse(kind, query);
+      return spotifySearchResponse([], "Spotify is not configured.", 503);
     }
 
     const searchUrl = new URL("https://api.spotify.com/v1/search");
@@ -131,7 +131,7 @@ async function handleSpotifySearchRequest(request: Request, env: Env) {
     });
 
     if (!response.ok) {
-      return sampleSpotifyResponse(kind, query);
+      return spotifySearchResponse([], "Spotify search failed.", 502);
     }
 
     const payload = (await response.json()) as SpotifySearchResponse;
@@ -142,10 +142,10 @@ async function handleSpotifySearchRequest(request: Request, env: Env) {
 
     return json({
       provider: "spotify",
-      items: items.length ? items : filterCatalog(kind, query),
+      items,
     });
   } catch {
-    return sampleSpotifyResponse(kind, query);
+    return spotifySearchResponse([], "Spotify search failed.", 502);
   }
 }
 
@@ -188,11 +188,12 @@ async function getSpotifyToken(env: Env) {
   return cachedSpotifyToken.value;
 }
 
-function sampleSpotifyResponse(kind: MusicKind, query: string) {
+function spotifySearchResponse(items: MusicItem[], error?: string, status = 200) {
   return json({
-    provider: "sample",
-    items: filterCatalog(kind, query),
-  });
+    provider: "spotify",
+    items,
+    ...(error ? { error } : {}),
+  }, status);
 }
 
 function mapSpotifyArtists(artists: SpotifyArtist[]): MusicItem[] {
@@ -376,28 +377,31 @@ function sanitizeItems(items: unknown, kind: MusicItem["kind"]): MusicItem[] {
     return [];
   }
 
-  return items.slice(0, 5).map((item, index) => {
-    const source = isRecord(item) ? item : {};
-    const name = getString(source.name, `${kind === "artist" ? "Artist" : "Song"} ${index + 1}`).slice(0, 100);
-    const subtitle = source.subtitle ? getString(source.subtitle, "").slice(0, 100) : undefined;
-    const artistNames = Array.isArray(source.artistNames)
-      ? source.artistNames.map((artistName) => String(artistName).slice(0, 100)).slice(0, 6)
-      : subtitle
-        ? [subtitle]
-        : [];
+  return items
+    .filter((item) => isRecord(item) && item.source === "spotify")
+    .slice(0, 5)
+    .map((item, index) => {
+      const source = isRecord(item) ? item : {};
+      const name = getString(source.name, `${kind === "artist" ? "Artist" : "Song"} ${index + 1}`).slice(0, 100);
+      const subtitle = source.subtitle ? getString(source.subtitle, "").slice(0, 100) : undefined;
+      const artistNames = Array.isArray(source.artistNames)
+        ? source.artistNames.map((artistName) => String(artistName).slice(0, 100)).slice(0, 6)
+        : subtitle
+          ? [subtitle]
+          : [];
 
-    return {
-      id: getString(source.id, `room:${kind}:${index}:${name}`).slice(0, 180),
-      kind,
-      name,
-      subtitle,
-      artistNames,
-      genres: Array.isArray(source.genres) ? source.genres.map((genre) => String(genre).slice(0, 48)).slice(0, 12) : [],
-      image: source.image ? getString(source.image, "").slice(0, 500) : undefined,
-      externalUrl: source.externalUrl ? getString(source.externalUrl, "").slice(0, 500) : undefined,
-      source: source.source === "spotify" || source.source === "sample" || source.source === "manual" ? source.source : "manual",
-    };
-  });
+      return {
+        id: getString(source.id, `room:${kind}:${index}:${name}`).slice(0, 180),
+        kind,
+        name,
+        subtitle,
+        artistNames,
+        genres: Array.isArray(source.genres) ? source.genres.map((genre) => String(genre).slice(0, 48)).slice(0, 12) : [],
+        image: source.image ? getString(source.image, "").slice(0, 500) : undefined,
+        externalUrl: source.externalUrl ? getString(source.externalUrl, "").slice(0, 500) : undefined,
+        source: "spotify",
+      };
+    });
 }
 
 function isRoomPayload(value: unknown): value is RoomPayload {

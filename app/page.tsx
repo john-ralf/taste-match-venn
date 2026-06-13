@@ -3,11 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   MAX_ITEMS_PER_KIND,
-  SAMPLE_TRACKS,
-  createDemoListeners,
   createEmptyListener,
-  createManualItem,
-  filterCatalog,
   getAllItems,
   isSameItem,
   itemKey,
@@ -72,7 +68,7 @@ const modeOptions: { value: Mode; label: string }[] = [
 ];
 
 export default function Home() {
-  const [listeners, setListeners] = useState<ListenerProfile[]>(() => createDemoListeners());
+  const [listeners, setListeners] = useState<ListenerProfile[]>(() => createInitialListeners());
   const [mode, setMode] = useState<Mode>("all");
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomStatus, setRoomStatus] = useState<RoomStatus>("idle");
@@ -110,7 +106,7 @@ export default function Home() {
       const field = kind === "artist" ? "artists" : "tracks";
       const current = listener[field];
 
-      if (current.length >= MAX_ITEMS_PER_KIND || current.some((existing) => isSameItem(existing, item))) {
+      if (item.source !== "spotify" || current.length >= MAX_ITEMS_PER_KIND || current.some((existing) => isSameItem(existing, item))) {
         return listener;
       }
 
@@ -185,7 +181,7 @@ export default function Home() {
     try {
       const room = await fetchRoom(id);
       applyingRemoteRef.current = true;
-      setListeners(room.listeners.length >= 2 ? room.listeners : createDemoListeners());
+      setListeners(room.listeners.length >= 2 ? room.listeners : createInitialListeners());
       setLocalListenerId(readStoredRoomListenerId(room.id, room.listeners));
       window.setTimeout(() => {
         applyingRemoteRef.current = false;
@@ -315,14 +311,6 @@ export default function Home() {
                 Create room
               </button>
             )}
-            <button
-              className="ghost-button"
-              type="button"
-              onClick={() => setListeners(createDemoListeners())}
-              disabled={roomPrivacyLocked}
-            >
-              Demo
-            </button>
             <button className="ghost-button" type="button" onClick={clearAll} disabled={Boolean(roomId && !localListenerId)}>
               Clear
             </button>
@@ -587,18 +575,23 @@ function SearchPicker({
   const [query, setQuery] = useState("");
   const [remoteSearch, setRemoteSearch] = useState<{
     query: string;
-    provider: "spotify" | "sample";
+    error?: string;
     items: MusicItem[];
   } | null>(null);
   const [open, setOpen] = useState(false);
   const inputId = useId();
   const full = selected.length >= MAX_ITEMS_PER_KIND;
   const trimmedQuery = query.trim();
-  const localResults = useMemo(() => filterCatalog(kind, trimmedQuery), [kind, trimmedQuery]);
   const shouldSearch = trimmedQuery.length >= 2 && !full;
   const activeRemoteSearch = shouldSearch && remoteSearch?.query === trimmedQuery ? remoteSearch : null;
-  const results = activeRemoteSearch ? mergeResults(activeRemoteSearch.items, localResults) : localResults;
-  const source: "spotify" | "sample" | "loading" = shouldSearch ? (activeRemoteSearch?.provider ?? "loading") : "sample";
+  const results = activeRemoteSearch?.items ?? [];
+  const sourceLabel = !shouldSearch
+    ? "Spotify required"
+    : activeRemoteSearch?.error
+      ? activeRemoteSearch.error
+      : activeRemoteSearch
+        ? "Spotify"
+        : "Searching";
 
   useEffect(() => {
     if (!shouldSearch) {
@@ -612,22 +605,18 @@ function SearchPicker({
           signal: controller.signal,
         });
 
-        if (!response.ok) {
-          throw new Error("Search failed");
-        }
-
         const payload = (await response.json()) as {
-          provider?: "spotify" | "sample";
+          error?: string;
           items?: MusicItem[];
         };
         setRemoteSearch({
           query: trimmedQuery,
-          provider: payload.provider === "spotify" ? "spotify" : "sample",
-          items: payload.items ?? [],
+          error: response.ok ? payload.error : (payload.error ?? "Spotify unavailable"),
+          items: (payload.items ?? []).filter((item) => item.source === "spotify"),
         });
       } catch {
         if (!controller.signal.aborted) {
-          setRemoteSearch({ query: trimmedQuery, provider: "sample", items: [] });
+          setRemoteSearch({ query: trimmedQuery, error: "Spotify unavailable", items: [] });
         }
       }
     }, 180);
@@ -649,12 +638,11 @@ function SearchPicker({
   }
 
   function addTypedValue() {
-    const trimmed = query.trim();
-    if (!trimmed || full) {
+    if (full || !results[0]) {
       return;
     }
 
-    choose(results[0] ?? createManualItem(kind, trimmed));
+    choose(results[0]);
   }
 
   return (
@@ -680,17 +668,17 @@ function SearchPicker({
               addTypedValue();
             }
           }}
-          placeholder={full ? "Full" : kind === "artist" ? "Search a band" : "Search a song"}
+          placeholder={full ? "Full" : kind === "artist" ? "Search Spotify bands" : "Search Spotify songs"}
           aria-label={`${owner} ${label}`}
         />
-        <button type="button" onClick={addTypedValue} disabled={full || !query.trim()}>
+        <button type="button" onClick={addTypedValue} disabled={full || !results[0]}>
           Add
         </button>
       </div>
 
       {open && !full && query.trim() ? (
         <div className="result-menu" role="listbox">
-          <div className="result-source">{source === "loading" ? "Searching" : source === "spotify" ? "Spotify" : "Sample"}</div>
+          <div className="result-source">{sourceLabel}</div>
           {results.slice(0, 6).map((item) => (
             <button key={item.id} className="result-option" type="button" onClick={() => choose(item)}>
               <ItemArtwork item={item} />
@@ -700,13 +688,7 @@ function SearchPicker({
               </span>
             </button>
           ))}
-          <button className="result-option manual-option" type="button" onClick={() => choose(createManualItem(kind, query))}>
-            <span className="manual-mark">+</span>
-            <span>
-              <strong>{query.trim()}</strong>
-              <small>Manual pick</small>
-            </span>
-          </button>
+          {activeRemoteSearch && !results.length ? <div className="result-empty">No Spotify choices found</div> : null}
         </div>
       ) : null}
 
@@ -907,6 +889,10 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function createInitialListeners() {
+  return [createEmptyListener(0), createEmptyListener(1)];
 }
 
 function isListenerComplete(listener: ListenerProfile) {
@@ -1154,54 +1140,8 @@ function truncateLabel(value: string) {
 }
 
 function buildRecommendations(listeners: ListenerProfile[]): Recommendation[] {
-  const selectedItems = listeners.flatMap((listener) => [...listener.artists, ...listener.tracks]);
-  if (!selectedItems.length) {
-    return [];
-  }
-
-  const selectedKeys = new Set(selectedItems.map(itemKey));
-  const selectedArtistNames = new Set(
-    selectedItems.flatMap((item) =>
-      item.kind === "artist" ? [normalizeMusicKey(item.name)] : (item.artistNames ?? []).map(normalizeMusicKey)
-    )
-  );
-  const listenerGenreSets = listeners.map((listener) => new Set(uniqueGenres([...listener.artists, ...listener.tracks])));
-  const genreCounts = new Map<string, number>();
-
-  for (const genreSet of listenerGenreSets) {
-    for (const genre of genreSet) {
-      genreCounts.set(genre, (genreCounts.get(genre) ?? 0) + 1);
-    }
-  }
-
-  const sharedGenreSet = new Set(
-    Array.from(genreCounts.entries())
-      .filter(([, count]) => count >= Math.min(2, listeners.length))
-      .map(([genre]) => genre)
-  );
-  const unionGenreSet = new Set(Array.from(genreCounts.keys()));
-
-  return SAMPLE_TRACKS.filter((trackItem) => !selectedKeys.has(itemKey(trackItem)))
-    .map((trackItem) => {
-      const normalizedArtists = (trackItem.artistNames ?? []).map(normalizeMusicKey);
-      const directArtistHit = normalizedArtists.some((artistName) => selectedArtistNames.has(artistName));
-      const sharedGenres = trackItem.genres.filter((genre) => sharedGenreSet.has(genre));
-      const relatedGenres = trackItem.genres.filter((genre) => unionGenreSet.has(genre));
-      const score = sharedGenres.length * 14 + relatedGenres.length * 5 + (directArtistHit ? 18 : 0);
-      const reasons = [
-        ...sharedGenres.slice(0, 2).map((genre) => genre),
-        ...(directArtistHit ? ["artist bridge"] : []),
-        ...relatedGenres.filter((genre) => !sharedGenres.includes(genre)).slice(0, 1),
-      ];
-
-      return {
-        item: trackItem,
-        score,
-        reasons: reasons.length ? reasons : ["wild card"],
-      };
-    })
-    .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name))
-    .slice(0, 6);
+  void listeners;
+  return [];
 }
 
 function getCircleLayout(count: number, score: number) {
@@ -1231,18 +1171,6 @@ function getCircleLayout(count: number, score: number) {
     { cx: 110 - spread, cy: 90 + spread * 0.58, r: 47, labelX: 68, labelY: 168 },
     { cx: 110 + spread, cy: 90 + spread * 0.58, r: 47, labelX: 152, labelY: 168 },
   ];
-}
-
-function mergeResults(primary: MusicItem[], fallback: MusicItem[]) {
-  const seen = new Set<string>();
-  return [...primary, ...fallback].filter((item) => {
-    const key = itemKey(item);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 }
 
 function formatItem(item: MusicItem) {
