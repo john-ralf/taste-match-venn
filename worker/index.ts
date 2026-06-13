@@ -1,12 +1,14 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import type { ListenerProfile, MusicItem } from "../lib/music";
+import { filterCatalog, type ListenerProfile, type MusicItem, type MusicKind } from "../lib/music";
 import type { RoomPayload, RoomSaveRequest } from "../lib/rooms";
 
 interface Env {
   ASSETS: Fetcher;
   ROOMS?: KVNamespace;
+  SPOTIFY_CLIENT_ID?: string;
+  SPOTIFY_CLIENT_SECRET?: string;
   DB: D1Database;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -25,6 +27,43 @@ interface ExecutionContext {
 const ROOM_TTL_SECONDS = 60 * 60 * 24 * 30;
 const ROOM_ID_PATTERN = /^[A-Z0-9]{6,12}$/;
 
+type SpotifyImage = {
+  url?: string;
+};
+
+type SpotifyArtist = {
+  id: string;
+  name: string;
+  genres?: string[];
+  images?: SpotifyImage[];
+  external_urls?: {
+    spotify?: string;
+  };
+};
+
+type SpotifyTrack = {
+  id: string;
+  name: string;
+  artists?: { name: string }[];
+  album?: {
+    images?: SpotifyImage[];
+  };
+  external_urls?: {
+    spotify?: string;
+  };
+};
+
+type SpotifySearchResponse = {
+  artists?: {
+    items?: SpotifyArtist[];
+  };
+  tracks?: {
+    items?: SpotifyTrack[];
+  };
+};
+
+let cachedSpotifyToken: { value: string; expiresAt: number } | null = null;
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set
@@ -37,6 +76,10 @@ const worker = {
 
     if (url.pathname === "/api/rooms" || url.pathname.startsWith("/api/rooms/")) {
       return handleRoomRequest(request, env);
+    }
+
+    if (url.pathname === "/api/spotify/search") {
+      return handleSpotifySearchRequest(request, env);
     }
 
     if (url.pathname === "/_vinext/image") {
@@ -55,6 +98,125 @@ const worker = {
 };
 
 export default worker;
+
+async function handleSpotifySearchRequest(request: Request, env: Env) {
+  const url = new URL(request.url);
+  const query = (url.searchParams.get("q") ?? "").trim();
+  const kind: MusicKind = url.searchParams.get("type") === "track" ? "track" : "artist";
+
+  if (!query) {
+    return json({ provider: "sample", items: filterCatalog(kind, "") });
+  }
+
+  try {
+    const token = await getSpotifyToken(env);
+    if (!token) {
+      return sampleSpotifyResponse(kind, query);
+    }
+
+    const searchUrl = new URL("https://api.spotify.com/v1/search");
+    searchUrl.searchParams.set("q", query);
+    searchUrl.searchParams.set("type", kind);
+    searchUrl.searchParams.set("limit", "8");
+    searchUrl.searchParams.set("market", "US");
+
+    const response = await fetch(searchUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      return sampleSpotifyResponse(kind, query);
+    }
+
+    const payload = (await response.json()) as SpotifySearchResponse;
+    const items = kind === "artist" ? mapSpotifyArtists(payload.artists?.items ?? []) : mapSpotifyTracks(payload.tracks?.items ?? []);
+
+    return json({
+      provider: "spotify",
+      items: items.length ? items : filterCatalog(kind, query),
+    });
+  } catch {
+    return sampleSpotifyResponse(kind, query);
+  }
+}
+
+async function getSpotifyToken(env: Env) {
+  if (cachedSpotifyToken && Date.now() < cachedSpotifyToken.expiresAt) {
+    return cachedSpotifyToken.value;
+  }
+
+  if (!env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET) {
+    return null;
+  }
+
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ grant_type: "client_credentials" }),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as {
+    access_token?: string;
+    expires_in?: number;
+  };
+
+  if (!payload.access_token) {
+    return null;
+  }
+
+  cachedSpotifyToken = {
+    value: payload.access_token,
+    expiresAt: Date.now() + Math.max(60, (payload.expires_in ?? 3600) - 60) * 1000,
+  };
+
+  return cachedSpotifyToken.value;
+}
+
+function sampleSpotifyResponse(kind: MusicKind, query: string) {
+  return json({
+    provider: "sample",
+    items: filterCatalog(kind, query),
+  });
+}
+
+function mapSpotifyArtists(artists: SpotifyArtist[]): MusicItem[] {
+  return artists.map((artist) => ({
+    id: `spotify:artist:${artist.id}`,
+    kind: "artist",
+    name: artist.name,
+    genres: artist.genres ?? [],
+    image: artist.images?.[0]?.url,
+    externalUrl: artist.external_urls?.spotify,
+    source: "spotify",
+  }));
+}
+
+function mapSpotifyTracks(tracks: SpotifyTrack[]): MusicItem[] {
+  return tracks.map((track) => {
+    const artistNames = track.artists?.map((artist) => artist.name).filter(Boolean) ?? [];
+
+    return {
+      id: `spotify:track:${track.id}`,
+      kind: "track",
+      name: track.name,
+      subtitle: artistNames.join(", "),
+      artistNames,
+      genres: [],
+      image: track.album?.images?.[0]?.url,
+      externalUrl: track.external_urls?.spotify,
+      source: "spotify",
+    };
+  });
+}
 
 async function handleRoomRequest(request: Request, env: Env) {
   if (!env.ROOMS) {
