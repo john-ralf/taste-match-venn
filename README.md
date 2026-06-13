@@ -13,6 +13,16 @@ SPOTIFY_CLIENT_SECRET=your_client_secret
 
 Spotify credentials stay on the server route at `app/api/spotify/search/route.ts`; the browser never receives the secret.
 
+## Shared Rooms
+
+The app can create shareable room links when a Cloudflare KV namespace is bound as `ROOMS`. In Cloudflare, create a KV namespace, copy its namespace ID, and add this build environment variable before redeploying:
+
+```bash
+ROOMS_KV_NAMESPACE_ID=your_kv_namespace_id
+```
+
+Once deployed with KV, use **Create room** in the app, then **Copy invite** to share the room link.
+
 ## Commands
 
 ```bash
