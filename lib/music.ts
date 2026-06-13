@@ -21,7 +21,7 @@ export type ListenerProfile = {
   tracks: MusicItem[];
 };
 
-export const MAX_ITEMS_PER_KIND = 5;
+export const MAX_TRACKS_PER_LISTENER = 10;
 
 export const SAMPLE_ARTISTS: MusicItem[] = [
   artist("radiohead", "Radiohead", ["alternative rock", "art rock", "electronic"]),

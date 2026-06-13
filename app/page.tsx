@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  MAX_ITEMS_PER_KIND,
+  MAX_TRACKS_PER_LISTENER,
   createEmptyListener,
   getAllItems,
   isSameItem,
@@ -14,8 +14,6 @@ import {
   type MusicKind,
 } from "@/lib/music";
 import type { RoomPayload } from "@/lib/rooms";
-
-type Mode = "all" | "artists" | "tracks";
 
 type PairOverlap = {
   a: number;
@@ -61,15 +59,8 @@ type VennMarker = {
 
 type RoomStatus = "idle" | "loading" | "saving" | "saved" | "error";
 
-const modeOptions: { value: Mode; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "artists", label: "Bands" },
-  { value: "tracks", label: "Songs" },
-];
-
 export default function Home() {
   const [listeners, setListeners] = useState<ListenerProfile[]>(() => createInitialListeners());
-  const [mode, setMode] = useState<Mode>("all");
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomStatus, setRoomStatus] = useState<RoomStatus>("idle");
   const [roomMessage, setRoomMessage] = useState("Solo screen");
@@ -79,7 +70,7 @@ export default function Home() {
   const lastRemoteUpdatedAtRef = useRef<string | null>(null);
   const hasLoadedRoomRef = useRef(false);
 
-  const stats = useMemo(() => computeStats(listeners, mode), [listeners, mode]);
+  const stats = useMemo(() => computeStats(listeners), [listeners]);
   const activeListener = roomId && localListenerId ? listeners.find((listener) => listener.id === localListenerId) : null;
   const activeListenerComplete = activeListener ? isListenerComplete(activeListener) : false;
   const roomPrivacyLocked = Boolean(roomId && (!activeListener || !activeListenerComplete));
@@ -92,7 +83,7 @@ export default function Home() {
   }, [activeListener, listeners, roomPrivacyLocked]);
   const recommendations = useMemo(() => (roomPrivacyLocked ? [] : buildRecommendations(listeners)), [listeners, roomPrivacyLocked]);
   const totalItems = visibleListenerEntries.reduce(
-    (sum, entry) => sum + entry.listener.artists.length + entry.listener.tracks.length,
+    (sum, entry) => sum + entry.listener.tracks.length,
     0
   );
   const roomLink = roomId && typeof window !== "undefined" ? `${window.location.origin}/?room=${roomId}` : "";
@@ -103,23 +94,32 @@ export default function Home() {
 
   function addItem(listenerId: string, kind: MusicKind, item: MusicItem) {
     updateListener(listenerId, (listener) => {
-      const field = kind === "artist" ? "artists" : "tracks";
-      const current = listener[field];
-
-      if (item.source !== "spotify" || current.length >= MAX_ITEMS_PER_KIND || current.some((existing) => isSameItem(existing, item))) {
+      if (kind !== "track") {
         return listener;
       }
 
-      return { ...listener, [field]: [...current, item] };
+      const current = listener.tracks;
+      if (
+        item.source !== "spotify" ||
+        current.length >= MAX_TRACKS_PER_LISTENER ||
+        current.some((existing) => isSameItem(existing, item))
+      ) {
+        return listener;
+      }
+
+      return { ...listener, artists: [], tracks: [...current, item] };
     });
   }
 
   function removeItem(listenerId: string, kind: MusicKind, item: MusicItem) {
     updateListener(listenerId, (listener) => {
-      const field = kind === "artist" ? "artists" : "tracks";
+      if (kind !== "track") {
+        return listener;
+      }
+
       return {
         ...listener,
-        [field]: listener[field].filter((existing) => !isSameItem(existing, item)),
+        tracks: listener.tracks.filter((existing) => !isSameItem(existing, item)),
       };
     });
   }
@@ -362,18 +362,6 @@ export default function Home() {
                 <p className="section-kicker">Similarity</p>
                 <h2>Live Venn</h2>
               </div>
-              <div className="segmented" aria-label="Chart mode">
-                {modeOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    className={mode === option.value ? "active" : ""}
-                    type="button"
-                    onClick={() => setMode(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
             </div>
 
             {roomPrivacyLocked ? (
@@ -492,7 +480,7 @@ function PrivacyGate({ activeListener }: { activeListener: ListenerProfile | nul
         <span />
       </div>
       <h3>Room hidden</h3>
-      <p>{progress ? `${progress.artists}/5 bands and ${progress.tracks}/5 songs` : "Choose your room slot"}</p>
+      <p>{progress ? `${progress.tracks}/10 songs` : "Choose your room slot"}</p>
     </div>
   );
 }
@@ -537,17 +525,8 @@ function ListenerPanel({
       />
 
       <SearchPicker
-        kind="artist"
-        label="Favorite bands"
-        owner={listener.name}
-        selected={listener.artists}
-        onAdd={(item) => onAddItem("artist", item)}
-        onRemove={(item) => onRemoveItem("artist", item)}
-      />
-
-      <SearchPicker
         kind="track"
-        label="Favorite songs"
+        label="10 favorite songs"
         owner={listener.name}
         selected={listener.tracks}
         onAdd={(item) => onAddItem("track", item)}
@@ -580,7 +559,7 @@ function SearchPicker({
   } | null>(null);
   const [open, setOpen] = useState(false);
   const inputId = useId();
-  const full = selected.length >= MAX_ITEMS_PER_KIND;
+  const full = selected.length >= MAX_TRACKS_PER_LISTENER;
   const trimmedQuery = query.trim();
   const shouldSearch = trimmedQuery.length >= 2 && !full;
   const activeRemoteSearch = shouldSearch && remoteSearch?.query === trimmedQuery ? remoteSearch : null;
@@ -649,7 +628,7 @@ function SearchPicker({
     <div className="picker">
       <div className="picker-label-row">
         <label htmlFor={inputId}>{label}</label>
-        <span>{selected.length}/5</span>
+        <span>{selected.length}/10</span>
       </div>
 
       <div className="search-control">
@@ -668,7 +647,7 @@ function SearchPicker({
               addTypedValue();
             }
           }}
-          placeholder={full ? "Full" : kind === "artist" ? "Search Spotify bands" : "Search Spotify songs"}
+          placeholder={full ? "Full" : "Search Spotify songs"}
           aria-label={`${owner} ${label}`}
         />
         <button type="button" onClick={addTypedValue} disabled={full || !results[0]}>
@@ -896,13 +875,12 @@ function createInitialListeners() {
 }
 
 function isListenerComplete(listener: ListenerProfile) {
-  return listener.artists.length >= MAX_ITEMS_PER_KIND && listener.tracks.length >= MAX_ITEMS_PER_KIND;
+  return listener.tracks.length >= MAX_TRACKS_PER_LISTENER;
 }
 
 function getListenerProgress(listener: ListenerProfile) {
   return {
-    artists: Math.min(listener.artists.length, MAX_ITEMS_PER_KIND),
-    tracks: Math.min(listener.tracks.length, MAX_ITEMS_PER_KIND),
+    tracks: Math.min(listener.tracks.length, MAX_TRACKS_PER_LISTENER),
   };
 }
 
@@ -932,8 +910,8 @@ function roomListenerStorageKey(roomId: string) {
   return `taste-match:${roomId}:listener`;
 }
 
-function computeStats(listeners: ListenerProfile[], mode: Mode): MatchStats {
-  const itemSets = listeners.map((listener) => new Map(getAllItems(listener, mode).map((item) => [itemKey(item), item])));
+function computeStats(listeners: ListenerProfile[]): MatchStats {
+  const itemSets = listeners.map((listener) => new Map(getAllItems(listener, "tracks").map((item) => [itemKey(item), item])));
   const unionKeys = new Set(itemSets.flatMap((set) => Array.from(set.keys())));
   const commonKeys = itemSets.length
     ? Array.from(itemSets[0].keys()).filter((key) => itemSets.every((set) => set.has(key)))
@@ -945,7 +923,7 @@ function computeStats(listeners: ListenerProfile[], mode: Mode): MatchStats {
       .map(([, item]) => item)
   );
 
-  const genreSets = listeners.map((listener) => new Set(uniqueGenres(getAllItems(listener, mode))));
+  const genreSets = listeners.map((listener) => new Set(uniqueGenres(getAllItems(listener, "tracks"))));
   const commonGenres = genreSets.length
     ? Array.from(genreSets[0]).filter((genre) => genreSets.every((set) => set.has(genre)))
     : [];
@@ -1011,11 +989,10 @@ function getVennMarkers(listeners: ListenerProfile[], layout: VennCircleLayout[]
       artistPick: boolean;
     }
   >();
-  const listenerGenreSets = listeners.map((listener) => new Set(uniqueGenres([...listener.artists, ...listener.tracks])));
+  const listenerGenreSets = listeners.map((listener) => new Set(uniqueGenres(listener.tracks)));
 
   listeners.forEach((listener, listenerIndex) => {
     const markerItems = [
-      ...listener.artists.map((item) => ({ label: item.name, item, artistPick: true })),
       ...listener.tracks.flatMap((item) =>
         (item.artistNames?.length ? item.artistNames : item.subtitle ? [item.subtitle] : []).map((label) => ({
           label,

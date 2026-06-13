@@ -26,6 +26,7 @@ interface ExecutionContext {
 
 const ROOM_TTL_SECONDS = 60 * 60 * 24 * 30;
 const ROOM_ID_PATTERN = /^[A-Z0-9]{6,12}$/;
+const MAX_TRACKS_PER_LISTENER = 10;
 
 type SpotifyImage = {
   url?: string;
@@ -366,7 +367,7 @@ function sanitizeListeners(listeners: unknown): ListenerProfile[] {
       id: getString(source.id, `listener-${index + 1}`),
       name: getString(source.name, `Listener ${index + 1}`).slice(0, 48),
       color: getString(source.color, ["#0f766e", "#c2410c", "#7c3aed", "#2563eb"][index] ?? "#0f766e"),
-      artists: sanitizeItems(source.artists, "artist"),
+      artists: [],
       tracks: sanitizeItems(source.tracks, "track"),
     };
   });
@@ -379,7 +380,7 @@ function sanitizeItems(items: unknown, kind: MusicItem["kind"]): MusicItem[] {
 
   return items
     .filter((item) => isRecord(item) && item.source === "spotify")
-    .slice(0, 5)
+    .slice(0, MAX_TRACKS_PER_LISTENER)
     .map((item, index) => {
       const source = isRecord(item) ? item : {};
       const name = getString(source.name, `${kind === "artist" ? "Artist" : "Song"} ${index + 1}`).slice(0, 100);
