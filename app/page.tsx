@@ -78,13 +78,27 @@ export default function Home() {
   const [roomStatus, setRoomStatus] = useState<RoomStatus>("idle");
   const [roomMessage, setRoomMessage] = useState("Solo screen");
   const [copied, setCopied] = useState(false);
+  const [localListenerId, setLocalListenerId] = useState<string | null>(null);
   const applyingRemoteRef = useRef(false);
   const lastRemoteUpdatedAtRef = useRef<string | null>(null);
   const hasLoadedRoomRef = useRef(false);
 
   const stats = useMemo(() => computeStats(listeners, mode), [listeners, mode]);
-  const recommendations = useMemo(() => buildRecommendations(listeners), [listeners]);
-  const totalItems = listeners.reduce((sum, listener) => sum + listener.artists.length + listener.tracks.length, 0);
+  const activeListener = roomId && localListenerId ? listeners.find((listener) => listener.id === localListenerId) : null;
+  const activeListenerComplete = activeListener ? isListenerComplete(activeListener) : false;
+  const roomPrivacyLocked = Boolean(roomId && (!activeListener || !activeListenerComplete));
+  const visibleListenerEntries = useMemo(() => {
+    const visibleListeners = roomPrivacyLocked && activeListener ? [activeListener] : roomPrivacyLocked ? [] : listeners;
+    return visibleListeners.map((listener) => ({
+      listener,
+      index: Math.max(0, listeners.findIndex((candidate) => candidate.id === listener.id)),
+    }));
+  }, [activeListener, listeners, roomPrivacyLocked]);
+  const recommendations = useMemo(() => (roomPrivacyLocked ? [] : buildRecommendations(listeners)), [listeners, roomPrivacyLocked]);
+  const totalItems = visibleListenerEntries.reduce(
+    (sum, entry) => sum + entry.listener.artists.length + entry.listener.tracks.length,
+    0
+  );
   const roomLink = roomId && typeof window !== "undefined" ? `${window.location.origin}/?room=${roomId}` : "";
 
   function updateListener(id: string, updater: (listener: ListenerProfile) => ListenerProfile) {
@@ -123,7 +137,15 @@ export default function Home() {
   }
 
   function clearAll() {
-    setListeners((current) => current.map((listener) => ({ ...listener, artists: [], tracks: [] })));
+    if (roomId && !localListenerId) {
+      return;
+    }
+
+    setListeners((current) =>
+      current.map((listener) =>
+        roomId && localListenerId && listener.id !== localListenerId ? listener : { ...listener, artists: [], tracks: [] }
+      )
+    );
   }
 
   async function createRoom() {
@@ -145,6 +167,8 @@ export default function Home() {
       lastRemoteUpdatedAtRef.current = room.updatedAt;
       hasLoadedRoomRef.current = true;
       setRoomId(room.id);
+      setLocalListenerId(listeners[0]?.id ?? null);
+      saveStoredRoomListenerId(room.id, listeners[0]?.id ?? null);
       setRoomStatus("saved");
       setRoomMessage(`Room ${room.id} ready`);
       window.history.replaceState(null, "", `?room=${room.id}`);
@@ -162,6 +186,7 @@ export default function Home() {
       const room = await fetchRoom(id);
       applyingRemoteRef.current = true;
       setListeners(room.listeners.length >= 2 ? room.listeners : createDemoListeners());
+      setLocalListenerId(readStoredRoomListenerId(room.id, room.listeners));
       window.setTimeout(() => {
         applyingRemoteRef.current = false;
       }, 0);
@@ -230,6 +255,14 @@ export default function Home() {
   }, [roomId]);
 
   useEffect(() => {
+    if (!roomId || !localListenerId) {
+      return;
+    }
+
+    saveStoredRoomListenerId(roomId, localListenerId);
+  }, [localListenerId, roomId]);
+
+  useEffect(() => {
     if (!roomId || applyingRemoteRef.current || !hasLoadedRoomRef.current) {
       return;
     }
@@ -267,7 +300,7 @@ export default function Home() {
           </div>
 
           <div className="top-actions">
-            <Metric label="Match" value={`${stats.score}%`} />
+            <Metric label="Match" value={roomPrivacyLocked ? "Locked" : `${stats.score}%`} />
             <Metric label="Picks" value={String(totalItems)} />
             <div className={`room-chip ${roomStatus}`}>
               <span>{roomId ? `Room ${roomId}` : "No room"}</span>
@@ -282,10 +315,15 @@ export default function Home() {
                 Create room
               </button>
             )}
-            <button className="ghost-button" type="button" onClick={() => setListeners(createDemoListeners())}>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => setListeners(createDemoListeners())}
+              disabled={roomPrivacyLocked}
+            >
               Demo
             </button>
-            <button className="ghost-button" type="button" onClick={clearAll}>
+            <button className="ghost-button" type="button" onClick={clearAll} disabled={Boolean(roomId && !localListenerId)}>
               Clear
             </button>
           </div>
@@ -293,13 +331,22 @@ export default function Home() {
 
         <div className="workbench">
           <section className="listener-column" aria-label="Listener inputs">
+            {roomId ? (
+              <RoomIdentityPicker
+                listeners={listeners}
+                activeListenerId={localListenerId}
+                activeListenerComplete={activeListenerComplete}
+                onSelect={setLocalListenerId}
+              />
+            ) : null}
+
             <div className="listener-grid">
-              {listeners.map((listener, index) => (
+              {visibleListenerEntries.map(({ listener, index }) => (
                 <ListenerPanel
                   key={listener.id}
                   listener={listener}
                   index={index}
-                  canRemove={listeners.length > 2}
+                  canRemove={!roomPrivacyLocked && listeners.length > 2}
                   onNameChange={(name) => updateListener(listener.id, (current) => ({ ...current, name }))}
                   onAddItem={(kind, item) => addItem(listener.id, kind, item)}
                   onRemoveItem={(kind, item) => removeItem(listener.id, kind, item)}
@@ -309,7 +356,12 @@ export default function Home() {
             </div>
 
             <div className="listener-actions">
-              <button className="primary-button" type="button" onClick={addListener} disabled={listeners.length >= 4}>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={addListener}
+                disabled={listeners.length >= 4 || roomPrivacyLocked}
+              >
                 Add listener
               </button>
               <span>{listeners.length}/4 listeners</span>
@@ -336,32 +388,40 @@ export default function Home() {
               </div>
             </div>
 
-            <VennDiagram listeners={listeners} stats={stats} />
+            {roomPrivacyLocked ? (
+              <PrivacyGate activeListener={activeListener} />
+            ) : (
+              <>
+                <VennDiagram listeners={listeners} stats={stats} />
 
-            <div className="stat-row">
-              <Metric label="Exact score" value={`${stats.exactScore}%`} />
-              <Metric label="Genre score" value={`${stats.genreScore}%`} />
-              <Metric label="Compared" value={String(stats.unionCount)} />
-            </div>
+                <div className="stat-row">
+                  <Metric label="Exact score" value={`${stats.exactScore}%`} />
+                  <Metric label="Genre score" value={`${stats.genreScore}%`} />
+                  <Metric label="Compared" value={String(stats.unionCount)} />
+                </div>
 
-            <OverlapDetails listeners={listeners} stats={stats} />
+                <OverlapDetails listeners={listeners} stats={stats} />
+              </>
+            )}
           </section>
 
-          <section className="recommendation-column" aria-label="Recommendations">
-            <div className="recommendation-header">
-              <div>
-                <p className="section-kicker">For the room</p>
-                <h2>Bridge Picks</h2>
+          {!roomPrivacyLocked ? (
+            <section className="recommendation-column" aria-label="Recommendations">
+              <div className="recommendation-header">
+                <div>
+                  <p className="section-kicker">For the room</p>
+                  <h2>Bridge Picks</h2>
+                </div>
+                <span>{recommendations.length}</span>
               </div>
-              <span>{recommendations.length}</span>
-            </div>
 
-            <div className="recommendation-list">
-              {recommendations.map((recommendation) => (
-                <RecommendationCard key={recommendation.item.id} recommendation={recommendation} />
-              ))}
-            </div>
-          </section>
+              <div className="recommendation-list">
+                {recommendations.map((recommendation) => (
+                  <RecommendationCard key={recommendation.item.id} recommendation={recommendation} />
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       </section>
     </main>
@@ -398,6 +458,55 @@ async function readApiError(response: Response) {
   } catch {
     return "Room request failed";
   }
+}
+
+function RoomIdentityPicker({
+  listeners,
+  activeListenerId,
+  activeListenerComplete,
+  onSelect,
+}: {
+  listeners: ListenerProfile[];
+  activeListenerId: string | null;
+  activeListenerComplete: boolean;
+  onSelect: (listenerId: string) => void;
+}) {
+  return (
+    <div className="room-identity">
+      <div>
+        <p className="section-kicker">You are</p>
+        <div className="identity-options" aria-label="Choose your room slot">
+          {listeners.map((listener) => (
+            <button
+              key={listener.id}
+              className={listener.id === activeListenerId ? "active" : ""}
+              type="button"
+              onClick={() => onSelect(listener.id)}
+              style={{ "--listener-color": listener.color } as CSSProperties}
+            >
+              <span aria-hidden="true" />
+              {listener.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      <strong>{activeListenerComplete ? "Ready" : "Hidden"}</strong>
+    </div>
+  );
+}
+
+function PrivacyGate({ activeListener }: { activeListener: ListenerProfile | null }) {
+  const progress = activeListener ? getListenerProgress(activeListener) : null;
+
+  return (
+    <div className="privacy-gate">
+      <div className="privacy-disc" aria-hidden="true">
+        <span />
+      </div>
+      <h3>Room hidden</h3>
+      <p>{progress ? `${progress.artists}/5 bands and ${progress.tracks}/5 songs` : "Choose your room slot"}</p>
+    </div>
+  );
 }
 
 function ListenerPanel({
@@ -798,6 +907,43 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function isListenerComplete(listener: ListenerProfile) {
+  return listener.artists.length >= MAX_ITEMS_PER_KIND && listener.tracks.length >= MAX_ITEMS_PER_KIND;
+}
+
+function getListenerProgress(listener: ListenerProfile) {
+  return {
+    artists: Math.min(listener.artists.length, MAX_ITEMS_PER_KIND),
+    tracks: Math.min(listener.tracks.length, MAX_ITEMS_PER_KIND),
+  };
+}
+
+function readStoredRoomListenerId(roomId: string, listeners: ListenerProfile[]) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const storedId = window.localStorage.getItem(roomListenerStorageKey(roomId));
+  return storedId && listeners.some((listener) => listener.id === storedId) ? storedId : null;
+}
+
+function saveStoredRoomListenerId(roomId: string, listenerId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const key = roomListenerStorageKey(roomId);
+  if (listenerId) {
+    window.localStorage.setItem(key, listenerId);
+  } else {
+    window.localStorage.removeItem(key);
+  }
+}
+
+function roomListenerStorageKey(roomId: string) {
+  return `taste-match:${roomId}:listener`;
 }
 
 function computeStats(listeners: ListenerProfile[], mode: Mode): MatchStats {
