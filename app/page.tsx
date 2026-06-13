@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   MAX_ITEMS_PER_KIND,
   SAMPLE_TRACKS,
@@ -17,6 +17,7 @@ import {
   type MusicItem,
   type MusicKind,
 } from "@/lib/music";
+import type { RoomPayload } from "@/lib/rooms";
 
 type Mode = "all" | "artists" | "tracks";
 
@@ -42,6 +43,8 @@ type Recommendation = {
   reasons: string[];
 };
 
+type RoomStatus = "idle" | "loading" | "saving" | "saved" | "error";
+
 const modeOptions: { value: Mode; label: string }[] = [
   { value: "all", label: "All" },
   { value: "artists", label: "Bands" },
@@ -51,10 +54,18 @@ const modeOptions: { value: Mode; label: string }[] = [
 export default function Home() {
   const [listeners, setListeners] = useState<ListenerProfile[]>(() => createDemoListeners());
   const [mode, setMode] = useState<Mode>("all");
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomStatus, setRoomStatus] = useState<RoomStatus>("idle");
+  const [roomMessage, setRoomMessage] = useState("Solo screen");
+  const [copied, setCopied] = useState(false);
+  const applyingRemoteRef = useRef(false);
+  const lastRemoteUpdatedAtRef = useRef<string | null>(null);
+  const hasLoadedRoomRef = useRef(false);
 
   const stats = useMemo(() => computeStats(listeners, mode), [listeners, mode]);
   const recommendations = useMemo(() => buildRecommendations(listeners), [listeners]);
   const totalItems = listeners.reduce((sum, listener) => sum + listener.artists.length + listener.tracks.length, 0);
+  const roomLink = roomId && typeof window !== "undefined" ? `${window.location.origin}/?room=${roomId}` : "";
 
   function updateListener(id: string, updater: (listener: ListenerProfile) => ListenerProfile) {
     setListeners((current) => current.map((listener) => (listener.id === id ? updater(listener) : listener)));
@@ -95,6 +106,132 @@ export default function Home() {
     setListeners((current) => current.map((listener) => ({ ...listener, artists: [], tracks: [] })));
   }
 
+  async function createRoom() {
+    setRoomStatus("loading");
+    setRoomMessage("Creating room");
+
+    try {
+      const response = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listeners }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response));
+      }
+
+      const room = (await response.json()) as RoomPayload;
+      lastRemoteUpdatedAtRef.current = room.updatedAt;
+      hasLoadedRoomRef.current = true;
+      setRoomId(room.id);
+      setRoomStatus("saved");
+      setRoomMessage(`Room ${room.id} ready`);
+      window.history.replaceState(null, "", `?room=${room.id}`);
+    } catch (error) {
+      setRoomStatus("error");
+      setRoomMessage(error instanceof Error ? error.message : "Room creation failed");
+    }
+  }
+
+  async function loadRoom(id: string) {
+    setRoomStatus("loading");
+    setRoomMessage(`Joining room ${id}`);
+
+    try {
+      const room = await fetchRoom(id);
+      applyingRemoteRef.current = true;
+      setListeners(room.listeners.length >= 2 ? room.listeners : createDemoListeners());
+      window.setTimeout(() => {
+        applyingRemoteRef.current = false;
+      }, 0);
+      lastRemoteUpdatedAtRef.current = room.updatedAt;
+      hasLoadedRoomRef.current = true;
+      setRoomId(room.id);
+      setRoomStatus("saved");
+      setRoomMessage(`Room ${room.id} joined`);
+    } catch (error) {
+      applyingRemoteRef.current = false;
+      setRoomStatus("error");
+      setRoomMessage(error instanceof Error ? error.message : "Room not found");
+    }
+  }
+
+  async function refreshRoom(id: string) {
+    try {
+      const room = await fetchRoom(id);
+      if (room.updatedAt === lastRemoteUpdatedAtRef.current) {
+        return;
+      }
+
+      applyingRemoteRef.current = true;
+      setListeners(room.listeners);
+      window.setTimeout(() => {
+        applyingRemoteRef.current = false;
+      }, 0);
+      lastRemoteUpdatedAtRef.current = room.updatedAt;
+      setRoomStatus("saved");
+      setRoomMessage(`Room ${room.id} updated`);
+    } catch {
+      setRoomStatus("error");
+      setRoomMessage("Room refresh failed");
+    }
+  }
+
+  async function copyInviteLink() {
+    if (!roomLink) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(roomLink);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("room")?.toUpperCase();
+    if (id) {
+      window.setTimeout(() => {
+        void loadRoom(id);
+      }, 0);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!roomId) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshRoom(roomId);
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId || applyingRemoteRef.current || !hasLoadedRoomRef.current) {
+      return;
+    }
+
+    setRoomStatus("saving");
+    setRoomMessage(`Saving room ${roomId}`);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const room = await saveRoom(roomId, listeners);
+        lastRemoteUpdatedAtRef.current = room.updatedAt;
+        setRoomStatus("saved");
+        setRoomMessage(`Room ${room.id} saved`);
+      } catch (error) {
+        setRoomStatus("error");
+        setRoomMessage(error instanceof Error ? error.message : "Room save failed");
+      }
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [listeners, roomId]);
+
   return (
     <main className="app-shell">
       <section className="app-frame">
@@ -112,6 +249,19 @@ export default function Home() {
           <div className="top-actions">
             <Metric label="Match" value={`${stats.score}%`} />
             <Metric label="Picks" value={String(totalItems)} />
+            <div className={`room-chip ${roomStatus}`}>
+              <span>{roomId ? `Room ${roomId}` : "No room"}</span>
+              <strong>{roomMessage}</strong>
+            </div>
+            {roomId ? (
+              <button className="ghost-button" type="button" onClick={copyInviteLink}>
+                {copied ? "Copied" : "Copy invite"}
+              </button>
+            ) : (
+              <button className="primary-button" type="button" onClick={createRoom} disabled={roomStatus === "loading"}>
+                Create room
+              </button>
+            )}
             <button className="ghost-button" type="button" onClick={() => setListeners(createDemoListeners())}>
               Demo
             </button>
@@ -196,6 +346,38 @@ export default function Home() {
       </section>
     </main>
   );
+}
+
+async function fetchRoom(id: string) {
+  const response = await fetch(`/api/rooms/${encodeURIComponent(id)}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+
+  return (await response.json()) as RoomPayload;
+}
+
+async function saveRoom(id: string, listeners: ListenerProfile[]) {
+  const response = await fetch(`/api/rooms/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ listeners }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+
+  return (await response.json()) as RoomPayload;
+}
+
+async function readApiError(response: Response) {
+  try {
+    const body = (await response.json()) as { error?: string };
+    return body.error ?? "Room request failed";
+  } catch {
+    return "Room request failed";
+  }
 }
 
 function ListenerPanel({
