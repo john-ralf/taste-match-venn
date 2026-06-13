@@ -162,6 +162,52 @@ h3 {
   padding: 9px 10px;
 }
 
+.room-chip {
+  min-width: 150px;
+  max-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 8px 10px;
+}
+
+.room-chip span,
+.room-chip strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-chip span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.room-chip strong {
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.room-chip.loading {
+  border-color: #b9d3ca;
+  background: #edf7f4;
+}
+
+.room-chip.error {
+  border-color: #f0b8a0;
+  background: #fff2ed;
+}
+
+.room-chip.error strong {
+  color: var(--orange);
+}
+
 .metric span {
   display: block;
   color: var(--muted);
