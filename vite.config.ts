@@ -8,6 +8,8 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 
 const d1 = process.env.SITE_D1_BINDING ?? null;
 const r2 = process.env.SITE_R2_BINDING ?? null;
+const roomsKvNamespaceId = process.env.ROOMS_KV_NAMESPACE_ID ?? null;
+const roomsKvPreviewNamespaceId = process.env.ROOMS_KV_PREVIEW_NAMESPACE_ID ?? roomsKvNamespaceId;
 
 const localBindingConfig = {
   main: "./worker/index.ts",
@@ -26,6 +28,15 @@ const localBindingConfig = {
         {
           binding: r2,
           bucket_name: "site-creator-r2",
+        },
+      ]
+    : [],
+  kv_namespaces: roomsKvNamespaceId
+    ? [
+        {
+          binding: "ROOMS",
+          id: roomsKvNamespaceId,
+          preview_id: roomsKvPreviewNamespaceId,
         },
       ]
     : [],
