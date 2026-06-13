@@ -348,7 +348,7 @@ export default function Home() {
                 className="primary-button"
                 type="button"
                 onClick={addListener}
-                disabled={listeners.length >= 4 || roomPrivacyLocked}
+                disabled={listeners.length >= 4}
               >
                 Add listener
               </button>
