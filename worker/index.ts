@@ -44,7 +44,7 @@ type SpotifyArtist = {
 type SpotifyTrack = {
   id: string;
   name: string;
-  artists?: { name: string }[];
+  artists?: { id?: string; name: string }[];
   album?: {
     images?: SpotifyImage[];
   };
@@ -60,6 +60,10 @@ type SpotifySearchResponse = {
   tracks?: {
     items?: SpotifyTrack[];
   };
+};
+
+type SpotifyArtistsResponse = {
+  artists?: SpotifyArtist[];
 };
 
 let cachedSpotifyToken: { value: string; expiresAt: number } | null = null;
@@ -131,7 +135,10 @@ async function handleSpotifySearchRequest(request: Request, env: Env) {
     }
 
     const payload = (await response.json()) as SpotifySearchResponse;
-    const items = kind === "artist" ? mapSpotifyArtists(payload.artists?.items ?? []) : mapSpotifyTracks(payload.tracks?.items ?? []);
+    const items =
+      kind === "artist"
+        ? mapSpotifyArtists(payload.artists?.items ?? [])
+        : await mapSpotifyTracks(payload.tracks?.items ?? [], token);
 
     return json({
       provider: "spotify",
@@ -200,9 +207,14 @@ function mapSpotifyArtists(artists: SpotifyArtist[]): MusicItem[] {
   }));
 }
 
-function mapSpotifyTracks(tracks: SpotifyTrack[]): MusicItem[] {
+async function mapSpotifyTracks(tracks: SpotifyTrack[], token: string): Promise<MusicItem[]> {
+  const genresByArtistId = await getSpotifyArtistGenres(token, tracks);
+
   return tracks.map((track) => {
     const artistNames = track.artists?.map((artist) => artist.name).filter(Boolean) ?? [];
+    const genres = uniqueStrings(
+      (track.artists ?? []).flatMap((artist) => (artist.id ? (genresByArtistId.get(artist.id) ?? []) : []))
+    );
 
     return {
       id: `spotify:track:${track.id}`,
@@ -210,12 +222,48 @@ function mapSpotifyTracks(tracks: SpotifyTrack[]): MusicItem[] {
       name: track.name,
       subtitle: artistNames.join(", "),
       artistNames,
-      genres: [],
+      genres,
       image: track.album?.images?.[0]?.url,
       externalUrl: track.external_urls?.spotify,
       source: "spotify",
     };
   });
+}
+
+async function getSpotifyArtistGenres(token: string, tracks: SpotifyTrack[]) {
+  const artistIds = uniqueStrings(tracks.flatMap((track) => track.artists?.map((artist) => artist.id).filter(Boolean) ?? []));
+  const genresByArtistId = new Map<string, string[]>();
+
+  for (let index = 0; index < artistIds.length; index += 50) {
+    const batch = artistIds.slice(index, index + 50);
+    if (!batch.length) {
+      continue;
+    }
+
+    const artistsUrl = new URL("https://api.spotify.com/v1/artists");
+    artistsUrl.searchParams.set("ids", batch.join(","));
+
+    const response = await fetch(artistsUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      continue;
+    }
+
+    const payload = (await response.json()) as SpotifyArtistsResponse;
+    for (const artist of payload.artists ?? []) {
+      genresByArtistId.set(artist.id, artist.genres ?? []);
+    }
+  }
+
+  return genresByArtistId;
+}
+
+function uniqueStrings(values: (string | undefined)[]) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).slice(0, 12);
 }
 
 async function handleRoomRequest(request: Request, env: Env) {
