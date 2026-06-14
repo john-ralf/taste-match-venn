@@ -1,5 +1,5 @@
 export type MusicKind = "artist" | "track";
-export type MusicSource = "spotify" | "sample" | "manual";
+export type MusicSource = "spotify" | "lastfm" | "sample" | "manual";
 
 export type MusicItem = {
   id: string;

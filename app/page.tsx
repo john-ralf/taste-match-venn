@@ -100,7 +100,7 @@ export default function Home() {
 
       const current = listener.tracks;
       if (
-        item.source !== "spotify" ||
+        !isSearchProviderItem(item) ||
         current.length >= MAX_TRACKS_PER_LISTENER ||
         current.some((existing) => isSameItem(existing, item))
       ) {
@@ -556,6 +556,7 @@ function SearchPicker({
     query: string;
     error?: string;
     items: MusicItem[];
+    provider?: string;
   } | null>(null);
   const [open, setOpen] = useState(false);
   const inputId = useId();
@@ -565,11 +566,11 @@ function SearchPicker({
   const activeRemoteSearch = shouldSearch && remoteSearch?.query === trimmedQuery ? remoteSearch : null;
   const results = activeRemoteSearch?.items ?? [];
   const sourceLabel = !shouldSearch
-    ? "Spotify required"
+    ? "Search songs"
     : activeRemoteSearch?.error
       ? activeRemoteSearch.error
       : activeRemoteSearch
-        ? "Spotify"
+        ? formatProvider(activeRemoteSearch.provider)
         : "Searching";
 
   useEffect(() => {
@@ -587,18 +588,20 @@ function SearchPicker({
         const payload = (await response.json()) as {
           error?: string;
           items?: MusicItem[];
+          provider?: string;
         };
         setRemoteSearch({
           query: trimmedQuery,
-          error: response.ok ? payload.error : (payload.error ?? "Spotify unavailable"),
-          items: (payload.items ?? []).filter((item) => item.source === "spotify"),
+          error: response.ok ? payload.error : (payload.error ?? "Music search unavailable"),
+          items: (payload.items ?? []).filter(isSearchProviderItem),
+          provider: payload.provider,
         });
       } catch {
         if (!controller.signal.aborted) {
-          setRemoteSearch({ query: trimmedQuery, error: "Spotify unavailable", items: [] });
+          setRemoteSearch({ query: trimmedQuery, error: "Music search unavailable", items: [] });
         }
       }
-    }, 180);
+    }, 450);
 
     return () => {
       controller.abort();
@@ -647,7 +650,7 @@ function SearchPicker({
               addTypedValue();
             }
           }}
-          placeholder={full ? "Full" : "Search Spotify songs"}
+          placeholder={full ? "Full" : "Search songs"}
           aria-label={`${owner} ${label}`}
         />
         <button type="button" onClick={addTypedValue} disabled={full || !results[0]}>
@@ -819,7 +822,7 @@ function RecommendationCard({ recommendation }: { recommendation: Recommendation
         </div>
         {item.externalUrl ? (
           <a href={item.externalUrl} target="_blank" rel="noreferrer">
-            Spotify
+            {formatSource(item)}
           </a>
         ) : null}
       </div>
@@ -836,8 +839,8 @@ function MusicPill({ item, onRemove }: { item: MusicItem; onRemove: () => void }
         <small>{item.subtitle || item.genres[0] || item.source}</small>
       </span>
       {item.externalUrl ? (
-        <a href={item.externalUrl} target="_blank" rel="noreferrer" aria-label={`Open ${item.name} on Spotify`}>
-          Spotify
+        <a href={item.externalUrl} target="_blank" rel="noreferrer" aria-label={`Open ${item.name} on ${formatSource(item)}`}>
+          {formatSource(item)}
         </a>
       ) : null}
       <button type="button" onClick={onRemove} aria-label={`Remove ${formatItem(item)}`}>
@@ -1154,4 +1157,16 @@ function getCircleLayout(count: number, score: number) {
 
 function formatItem(item: MusicItem) {
   return item.subtitle ? `${item.name} - ${item.subtitle}` : item.name;
+}
+
+function isSearchProviderItem(item: MusicItem) {
+  return item.source === "spotify" || item.source === "lastfm";
+}
+
+function formatSource(item: MusicItem) {
+  return item.source === "lastfm" ? "Last.fm" : "Spotify";
+}
+
+function formatProvider(provider: string | undefined) {
+  return provider === "lastfm" ? "Last.fm" : "Spotify";
 }

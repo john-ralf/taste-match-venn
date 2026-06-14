@@ -1,17 +1,20 @@
 # Taste Match
 
-An interactive music taste Venn diagram. Each listener chooses 10 favorite Spotify songs, then the app charts exact song overlap, artist signals from those songs, shared genres, and bridge recommendations.
+An interactive music taste Venn diagram. Each listener chooses 10 favorite songs, then the app charts exact song overlap, artist signals from those songs, shared genres, and bridge recommendations.
 
-## Spotify Search
+## Music Search
 
-The app requires Spotify search so song choices use consistent spellings and include artist genre data. Create a local `.env` with:
+The app searches Spotify first, then falls back to Last.fm for song results and tag-based genre data. Create a local `.env` with:
 
 ```bash
 SPOTIFY_CLIENT_ID=your_client_id
 SPOTIFY_CLIENT_SECRET=your_client_secret
+LASTFM_API_KEY=your_lastfm_api_key
 ```
 
-Spotify credentials stay on the server route at `app/api/spotify/search/route.ts`; the browser never receives the secret.
+API credentials stay on the server route at `app/api/spotify/search/route.ts`; the browser never receives the secrets.
+
+In Cloudflare, add `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `LASTFM_API_KEY` as production variables/secrets.
 
 ## Shared Rooms
 
@@ -33,5 +36,5 @@ npm run build
 
 ## Notes
 
-- The search route uses Spotify's Client Credentials flow and the `/v1/search` catalog endpoint.
+- The search route uses Spotify's Client Credentials flow and the `/v1/search` catalog endpoint, with Last.fm `track.search` and `track.getTopTags` as a fallback.
 - Spotify's recommendations and related-artist endpoints are currently marked deprecated, so this app computes taste matching locally from selected tracks and shared genres.
