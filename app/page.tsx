@@ -667,7 +667,9 @@ function SearchPicker({
               </span>
             </button>
           ))}
-          {activeRemoteSearch && !results.length ? <div className="result-empty">No Spotify choices found</div> : null}
+          {activeRemoteSearch && !results.length ? (
+            <div className="result-empty">{activeRemoteSearch.error ?? "No Spotify choices found"}</div>
+          ) : null}
         </div>
       ) : null}
 

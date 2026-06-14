@@ -123,16 +123,16 @@ async function handleSpotifySearchRequest(request: Request, env: Env) {
     searchUrl.searchParams.set("q", query);
     searchUrl.searchParams.set("type", kind);
     searchUrl.searchParams.set("limit", "8");
-    searchUrl.searchParams.set("market", "US");
 
     const response = await fetch(searchUrl, {
       headers: {
+        Accept: "application/json",
         Authorization: `Bearer ${token}`,
       },
     });
 
     if (!response.ok) {
-      return spotifySearchResponse([], "Spotify search failed.", 502);
+      return spotifySearchResponse([], await getSpotifyErrorMessage(response, "Spotify search failed."), 502);
     }
 
     const payload = (await response.json()) as SpotifySearchResponse;
@@ -162,6 +162,7 @@ async function getSpotifyToken(env: Env) {
   const response = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
+      Accept: "application/json",
       Authorization: `Basic ${btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
@@ -247,6 +248,7 @@ async function getSpotifyArtistGenres(token: string, tracks: SpotifyTrack[]) {
 
     const response = await fetch(artistsUrl, {
       headers: {
+        Accept: "application/json",
         Authorization: `Bearer ${token}`,
       },
     });
@@ -266,6 +268,16 @@ async function getSpotifyArtistGenres(token: string, tracks: SpotifyTrack[]) {
 
 function uniqueStrings(values: (string | undefined)[]) {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).slice(0, 12);
+}
+
+async function getSpotifyErrorMessage(response: Response, fallback: string) {
+  try {
+    const payload = (await response.json()) as { error?: { message?: string } };
+    const message = payload.error?.message;
+    return message ? `${fallback} (${response.status}: ${message})` : `${fallback} (${response.status})`;
+  } catch {
+    return `${fallback} (${response.status})`;
+  }
 }
 
 async function handleRoomRequest(request: Request, env: Env) {
